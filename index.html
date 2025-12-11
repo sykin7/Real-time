@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Supabase Chat</title>
+    <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #e5ddd5; margin: 0; display: flex; justify-content: center; height: 100vh; }
+        .app-container { width: 100%; max-width: 600px; background: white; height: 100%; display: flex; flex-direction: column; box-shadow: 0 0 20px rgba(0,0,0,0.1); position: relative; }
+        #auth-screen { position: absolute; top:0; left:0; width:100%; height:100%; background:white; z-index: 100; display: flex; flex-direction: column; justify-content: center; padding: 40px; box-sizing: border-box; }
+        #auth-screen input { padding: 15px; margin-bottom: 15px; border: 1px solid #ddd; border-radius: 8px; font-size: 16px; }
+        #auth-screen button { padding: 15px; background: #075e54; color: white; border: none; border-radius: 8px; font-size: 16px; cursor: pointer; }
+        header { background-color: #075e54; color: white; padding: 15px; display: flex; align-items: center; justify-content: space-between; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
+        .target-input-group { display: flex; background: rgba(255,255,255,0.1); padding: 5px; border-radius: 20px; flex-grow: 1; margin: 0 10px; }
+        #target-email { background: transparent; border: none; color: white; padding: 5px 10px; outline: none; width: 100%; }
+        #target-email::placeholder { color: rgba(255,255,255,0.7); }
+        #chat-box { flex-grow: 1; overflow-y: scroll; padding: 20px; background-color: #e5ddd5; }
+        .msg-row { display: flex; margin-bottom: 15px; animation: fadeIn 0.3s ease; }
+        .msg-bubble { max-width: 70%; padding: 10px 15px; border-radius: 15px; position: relative; font-size: 15px; line-height: 1.4; box-shadow: 0 1px 2px rgba(0,0,0,0.1); word-wrap: break-word;}
+        .other-msg { justify-content: flex-start; }
+        .other-msg .msg-bubble { background: white; border-top-left-radius: 0; }
+        .my-msg { justify-content: flex-end; }
+        .my-msg .msg-bubble { background: #dcf8c6; border-top-right-radius: 0; }
+        .time-stamp { font-size: 10px; color: #999; margin-top: 5px; text-align: right; display: block; }
+        .input-area { background: #f0f0f0; padding: 10px; display: flex; align-items: center; }
+        #message-input { flex-grow: 1; padding: 12px; border: none; border-radius: 20px; outline: none; font-size: 16px; margin-right: 10px; }
+        .send-btn { background: #075e54; color: white; border: none; width: 45px; height: 45px; border-radius: 50%; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: transform 0.1s; }
+        .send-btn:active { transform: scale(0.9); }
+        .hidden { display: none !important; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+    </style>
+</head>
+<body>
+    <div class="app-container">
+        <div id="auth-screen">
+            <h2 style="text-align: center; color: #075e54;">Supabase Chat</h2>
+            <input type="email" id="email" placeholder="Email">
+            <input type="password" id="password" placeholder="Password">
+            <button onclick="handleLogin()" id="login-btn">Login / Sign up</button>
+        </div>
+        <div id="chat-screen" class="hidden">
+            <header>
+                <div style="font-size: 12px;">
+                    <div>User: <span id="my-display-email" style="font-weight:bold;"></span></div>
+                    <div style="cursor:pointer; opacity:0.8;" onclick="signOut()">[Logout]</div>
+                </div>
+                <div class="target-input-group">
+                    <i class="fas fa-user" style="padding: 8px; color: rgba(255,255,255,0.7);"></i>
+                    <input type="text" id="target-email" placeholder="Target Email" onchange="reloadChat()">
+                </div>
+            </header>
+            <div id="chat-box"></div>
+            <div class="input-area">
+                <input type="text" id="message-input" placeholder="Message..." onkeypress="if(event.key==='Enter') sendMessage()">
+                <button class="send-btn" onclick="sendMessage()" id="send-btn">
+                    <i class="fas fa-paper-plane"></i>
+                </button>
+            </div>
+        </div>
+    </div>
+    <script>
+        const SUPABASE_URL = 'PLACEHOLDER_SUPABASE_URL'
+        const SUPABASE_KEY = 'PLACEHOLDER_SUPABASE_KEY'
+
+        const { createClient } = supabase
+        const client = createClient(SUPABASE_URL, SUPABASE_KEY)
+        let myEmail = "";
+        let allMessagesCache = [];
+
+        checkSession();
+
+        async function checkSession() {
+            const { data } = await client.auth.getSession();
+            if (data.session) {
+                myEmail = data.session.user.email;
+                enterChatMode();
+            }
+        }
+
+        async function handleLogin() {
+            const email = document.getElementById('email').value;
+            const password = document.getElementById('password').value;
+            const btn = document.getElementById('login-btn');
+            
+            if (!email || !password) return alert("Please fill all fields");
+            
+            btn.innerText = "Processing...";
+            btn.disabled = true;
+
+            let { data, error } = await client.auth.signInWithPassword({ email, password });
+            
+            if (error) {
+                const signUp = await client.auth.signUp({ email, password });
+                if (signUp.error) {
+                    alert("Error: " + signUp.error.message);
+                    btn.innerText = "Login / Sign up";
+                    btn.disabled = false;
+                    return;
+                }
+                data = signUp.data;
+                alert("Registered successfully!");
+            }
+
+            if (data.user) {
+                myEmail = data.user.email;
+                enterChatMode();
+            }
+        }
+
+        function enterChatMode() {
+            document.getElementById('auth-screen').classList.add('hidden');
+            document.getElementById('chat-screen').classList.remove('hidden');
+            document.getElementById('my-display-email').innerText = myEmail;
+            const lastContact = localStorage.getItem('last_contact_' + myEmail);
+            if (lastContact) {
+                document.getElementById('target-email').value = lastContact;
+            }
+            startChatSystem();
+        }
+
+        async function startChatSystem() {
+            const { data } = await client
+                .from('messages')
+                .select('*')
+                .order('created_at', { ascending: true });
+            
+            if (data) {
+                allMessagesCache = data;
+                renderMessages();
+            }
+
+            client.channel('chat_room')
+                .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, payload => {
+                    allMessagesCache.push(payload.new);
+                    renderMessages();
+                })
+                .subscribe();
+        }
+
+        function renderMessages() {
+            const chatBox = document.getElementById('chat-box');
+            const targetEmail = document.getElementById('target-email').value.trim();
+            
+            chatBox.innerHTML = ''; 
+
+            const filteredMsgs = allMessagesCache.filter(msg => {
+                return (msg.sender_email === myEmail && msg.receiver_email === targetEmail) ||
+                       (msg.sender_email === targetEmail && msg.receiver_email === myEmail);
+            });
+
+            filteredMsgs.forEach(msg => {
+                const isMe = msg.sender_email === myEmail;
+                const div = document.createElement('div');
+                div.className = 'msg-row ' + (isMe ? 'my-msg' : 'other-msg');
+                const timeStr = new Date(msg.created_at).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+                div.innerHTML = `
+                    <div class="msg-bubble">
+                        ${msg.content}
+                        <span class="time-stamp">${timeStr}</span>
+                    </div>
+                `;
+                chatBox.appendChild(div);
+            });
+            chatBox.scrollTop = chatBox.scrollHeight;
+        }
+
+        function reloadChat() {
+            const target = document.getElementById('target-email').value.trim();
+            if(target) {
+                localStorage.setItem('last_contact_' + myEmail, target);
+            }
+            renderMessages();
+        }
+
+        async function sendMessage() {
+            const target = document.getElementById('target-email').value.trim();
+            const input = document.getElementById('message-input');
+            const text = input.value;
+            const btn = document.getElementById('send-btn');
+
+            if (!target) return alert("Please enter target email first");
+            if (!text) return;
+
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>'; 
+            
+            const { error } = await client.from('messages').insert({
+                content: text,
+                sender_email: myEmail,
+                receiver_email: target
+            });
+
+            if (error) {
+                alert("Failed to send");
+            } else {
+                input.value = '';
+                localStorage.setItem('last_contact_' + myEmail, target);
+            }
+            btn.innerHTML = '<i class="fas fa-paper-plane"></i>';
+        }
+
+        async function signOut() {
+            await client.auth.signOut();
+            location.reload();
+        }
+    </script>
+</body>
+</html>
